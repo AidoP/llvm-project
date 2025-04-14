@@ -15,37 +15,60 @@
 #define LLVM_OBJECT_GOFF_H
 
 #include "llvm/ADT/SmallString.h"
-#include "llvm/ADT/SmallVector.h"
 #include "llvm/BinaryFormat/GOFF.h"
-#include "llvm/Support/Debug.h"
 #include "llvm/Support/Endian.h"
 #include "llvm/Support/raw_ostream.h"
 
 namespace llvm {
-namespace object {
+
+namespace GOFF {
 
 /// \brief Represents a GOFF physical record.
 ///
 /// Specifies protected member functions to manipulate the record. These should
 /// be called from deriving classes to change values as that record specifies.
 class Record {
-public:
-  static Error getContinuousData(const uint8_t *Record, uint16_t DataLength,
-                                 int DataIndex, SmallString<256> &CompleteData);
+private:
+  const uint8_t *Ptr = nullptr;
 
-  static bool isContinued(const uint8_t *Record) {
-    uint8_t IsContinued;
-    getBits(Record, 1, 7, 1, IsContinued);
-    return IsContinued;
+public:
+  Record() = default;
+  Record(const uint8_t *Buffer) : Ptr(Buffer) {};
+
+  /// Returns true if the record is non-null.
+  explicit operator bool() const {
+    return Ptr != nullptr;
+  }
+  bool operator==(Record Other) const {
+    return Ptr == Other.Ptr;
   }
 
-  static bool isContinuation(const uint8_t *Record) {
-    uint8_t IsContinuation;
-    getBits(Record, 1, 6, 1, IsContinuation);
-    return IsContinuation;
+  /// Increment the record pointer.
+  Record &operator++() {
+    Ptr += RecordLength;
+    return *this;
+  }
+
+  [[nodiscard]] const uint8_t *getBuffer() const {
+    return Ptr;
+  }
+
+  [[nodiscard]] RecordType getType() const {
+    return static_cast<GOFF::RecordType>(Ptr[1] >> 4);
+  }
+
+  [[nodiscard]] bool isContinued() const {
+    return static_cast<bool>(getBits(1, 7, 1));
+  }
+
+  [[nodiscard]] bool isContinuation() const {
+    return static_cast<bool>(getBits(1, 6, 1));
   }
 
 protected:
+  Error getContinuousData(uint16_t DataLength, uint32_t Offset,
+                                 SmallString<256> &CompleteData) const;
+
   /// \brief Get bit field of specified byte.
   ///
   /// Used to pack bit fields into one byte. Fields are packed left to right.
@@ -55,249 +78,194 @@ protected:
   /// \param BitIndex index of first bit of field.
   /// \param Length length of bit field.
   /// \param Value value of bit field.
-  static void getBits(const uint8_t *Bytes, uint8_t ByteIndex, uint8_t BitIndex,
-                      uint8_t Length, uint8_t &Value) {
+  [[nodiscard]] uint8_t getBits(uint8_t ByteIndex, uint8_t BitIndex, uint8_t Length) const {
+    assert(Ptr != nullptr);
     assert(ByteIndex < GOFF::RecordLength && "Byte index out of bounds!");
     assert(BitIndex < 8 && "Bit index out of bounds!");
     assert(Length + BitIndex <= 8 && "Bit length too long!");
 
-    get<uint8_t>(Bytes, ByteIndex, Value);
+    auto Value = get<uint8_t>(ByteIndex);
     Value = (Value >> (8 - BitIndex - Length)) & ((1 << Length) - 1);
+    return Value;
   }
 
   template <class T>
-  static void get(const uint8_t *Bytes, uint8_t ByteIndex, T &Value) {
+  [[nodiscard]] T get(uint8_t ByteIndex) const {
+    assert(Ptr != nullptr);
     assert(ByteIndex + sizeof(T) <= GOFF::RecordLength &&
            "Byte index out of bounds!");
-    Value = support::endian::read<T, llvm::endianness::big>(&Bytes[ByteIndex]);
+    return support::endian::read<T, llvm::endianness::big>(Ptr + ByteIndex);
   }
 };
 
 class TXTRecord : public Record {
 public:
   /// \brief Maximum length of data; any more must go in continuation.
-  static const uint8_t TXTMaxDataLength = 56;
+  static constexpr uint8_t TXTMaxDataLength = 56;
 
-  static Error getData(const uint8_t *Record, SmallString<256> &CompleteData);
+  TXTRecord() = default;
+  TXTRecord(Record R) : Record(R) {}
 
-  static void getElementEsdId(const uint8_t *Record, uint32_t &EsdId) {
-    get<uint32_t>(Record, 4, EsdId);
+  Error getData(SmallString<256> &CompleteData) const ;
+
+  [[nodiscard]] uint32_t getElementEsdId() const {
+    return get<uint32_t>(4);
   }
 
-  static void getOffset(const uint8_t *Record, uint32_t &Offset) {
-    get<uint32_t>(Record, 12, Offset);
+  [[nodiscard]] uint32_t getOffset() const {
+    return get<uint32_t>(12);
   }
 
-  static void getDataLength(const uint8_t *Record, uint16_t &Length) {
-    get<uint16_t>(Record, 22, Length);
+  [[nodiscard]] uint16_t getDataLength() const {
+    return get<uint16_t>(22);
   }
 };
 
 class HDRRecord : public Record {
 public:
-  static Error getData(const uint8_t *Record, SmallString<256> &CompleteData);
+  HDRRecord() = default;
+  HDRRecord(Record R) : Record(R) {}
+  Error getData(SmallString<256> &CompleteData) const;
 
-  static uint16_t getPropertyModuleLength(const uint8_t *Record) {
-    uint16_t Length;
-    get<uint16_t>(Record, 52, Length);
-    return Length;
+  [[nodiscard]] uint16_t getPropertyModuleLength() const {
+    return get<uint16_t>(52);
   }
 };
 
 class ESDRecord : public Record {
 public:
-  /// \brief Number of bytes for name; any more must go in continuation.
-  /// This is the number of bytes that can fit into the data field of an ESD
-  /// record.
-  static const uint8_t ESDMaxUncontinuedNameLength = 8;
+  ESDRecord() = default;
+  ESDRecord(Record R) : Record(R) {}
 
-  /// \brief Maximum name length for ESD records and continuations.
-  /// This is the number of bytes that can fit into the data field of an ESD
-  /// record AND following continuations. This is limited fundamentally by the
-  /// 16 bit SIGNED length field.
-  static const uint16_t MaxNameLength = 32 * 1024;
-
-public:
-  static Error getData(const uint8_t *Record, SmallString<256> &CompleteData);
+  Error getData(SmallString<256> &CompleteData) const;
 
   // ESD Get routines.
-  static void getSymbolType(const uint8_t *Record,
-                            GOFF::ESDSymbolType &SymbolType) {
-    uint8_t Value;
-    get<uint8_t>(Record, 3, Value);
-    SymbolType = (GOFF::ESDSymbolType)Value;
+  [[nodiscard]] ESDSymbolType getSymbolType() const {
+    return static_cast<ESDSymbolType>(get<uint8_t>(3));
   }
 
-  static void getEsdId(const uint8_t *Record, uint32_t &EsdId) {
-    get<uint32_t>(Record, 4, EsdId);
+  [[nodiscard]] uint32_t getEsdId() const {
+    return get<uint32_t>(4);
   }
 
-  static void getParentEsdId(const uint8_t *Record, uint32_t &EsdId) {
-    get<uint32_t>(Record, 8, EsdId);
+  [[nodiscard]] uint32_t getParentEsdId() const {
+    return get<uint32_t>(8);
   }
 
-  static void getOffset(const uint8_t *Record, uint32_t &Offset) {
-    get<uint32_t>(Record, 16, Offset);
+  [[nodiscard]] uint32_t getOffset() const {
+    return get<uint32_t>(16);
   }
 
-  static void getLength(const uint8_t *Record, uint32_t &Length) {
-    get<uint32_t>(Record, 24, Length);
+  [[nodiscard]] uint32_t getLength() const {
+    return get<uint32_t>(24);
   }
 
-  static void getNameSpaceId(const uint8_t *Record, GOFF::ESDNameSpaceId &Id) {
-    uint8_t Value;
-    get<uint8_t>(Record, 40, Value);
-    Id = (GOFF::ESDNameSpaceId)Value;
+  [[nodiscard]] ESDNameSpaceId getNameSpaceId() const {
+    return static_cast<GOFF::ESDNameSpaceId>(get<uint8_t>(40));
   }
 
-  static void getFillBytePresent(const uint8_t *Record, bool &Present) {
-    uint8_t Value;
-    getBits(Record, 41, 0, 1, Value);
-    Present = (bool)Value;
+  [[nodiscard]] bool getFillBytePresent() const {
+    return static_cast<bool>(getBits(41, 0, 1));
   }
 
-  static void getNameMangled(const uint8_t *Record, bool &Mangled) {
-    uint8_t Value;
-    getBits(Record, 41, 1, 1, Value);
-    Mangled = (bool)Value;
+  [[nodiscard]] bool getNameMangled() const {
+    return static_cast<bool>(getBits(41, 1, 1));
   }
 
-  static void getRenamable(const uint8_t *Record, bool &Renamable) {
-    uint8_t Value;
-    getBits(Record, 41, 2, 1, Value);
-    Renamable = (bool)Value;
+  [[nodiscard]] bool getRenamable() const {
+    return static_cast<bool>(getBits(41, 2, 1));
   }
 
-  static void getRemovable(const uint8_t *Record, bool &Removable) {
-    uint8_t Value;
-    getBits(Record, 41, 3, 1, Value);
-    Removable = (bool)Value;
+  [[nodiscard]] bool getRemovable() const {
+    return static_cast<bool>(getBits(41, 3, 1));
   }
 
-  static void getFillByteValue(const uint8_t *Record, uint8_t &Fill) {
-    get<uint8_t>(Record, 42, Fill);
+  [[nodiscard]] uint8_t getFillByteValue() const {
+    return get<uint8_t>(42);
   }
 
-  static void getAdaEsdId(const uint8_t *Record, uint32_t &EsdId) {
-    get<uint32_t>(Record, 44, EsdId);
+  [[nodiscard]] uint32_t getAdaEsdId() const {
+    return get<uint32_t>(44);
   }
 
-  static void getSortPriority(const uint8_t *Record, uint32_t &Priority) {
-    get<uint32_t>(Record, 48, Priority);
+  [[nodiscard]] uint32_t getSortPriority() const {
+    return get<uint32_t>(48);
   }
 
-  static void getAmode(const uint8_t *Record, GOFF::ESDAmode &Amode) {
-    uint8_t Value;
-    get<uint8_t>(Record, 60, Value);
-    Amode = (GOFF::ESDAmode)Value;
+  [[nodiscard]] ESDAmode getAmode() const {
+    return static_cast<GOFF::ESDAmode>(get<uint8_t>(60));
   }
 
-  static void getRmode(const uint8_t *Record, GOFF::ESDRmode &Rmode) {
-    uint8_t Value;
-    get<uint8_t>(Record, 61, Value);
-    Rmode = (GOFF::ESDRmode)Value;
+  [[nodiscard]] ESDRmode getRmode() const {
+    return static_cast<GOFF::ESDRmode>(get<uint8_t>(61));
   }
 
-  static void getTextStyle(const uint8_t *Record, GOFF::ESDTextStyle &Style) {
-    uint8_t Value;
-    getBits(Record, 62, 0, 4, Value);
-    Style = (GOFF::ESDTextStyle)Value;
+  [[nodiscard]] ESDTextStyle getTextStyle() const {
+    return static_cast<GOFF::ESDTextStyle>(getBits(62, 0, 4));
   }
 
-  static void getBindingAlgorithm(const uint8_t *Record,
-                                  GOFF::ESDBindingAlgorithm &Algorithm) {
-    uint8_t Value;
-    getBits(Record, 62, 4, 4, Value);
-    Algorithm = (GOFF::ESDBindingAlgorithm)Value;
+  [[nodiscard]] ESDBindingAlgorithm getBindingAlgorithm() const {
+    return static_cast<GOFF::ESDBindingAlgorithm>(getBits(62, 4, 4));
   }
 
-  static void getTaskingBehavior(const uint8_t *Record,
-                                 GOFF::ESDTaskingBehavior &TaskingBehavior) {
-    uint8_t Value;
-    getBits(Record, 63, 0, 3, Value);
-    TaskingBehavior = (GOFF::ESDTaskingBehavior)Value;
+  [[nodiscard]] ESDTaskingBehavior getTaskingBehavior() const {
+    return static_cast<GOFF::ESDTaskingBehavior>(getBits(63, 0, 3));
   }
 
-  static void getReadOnly(const uint8_t *Record, bool &ReadOnly) {
-    uint8_t Value;
-    getBits(Record, 63, 4, 1, Value);
-    ReadOnly = (bool)Value;
+  [[nodiscard]] bool getReadOnly() const {
+    return static_cast<bool>(getBits(63, 4, 1));
   }
 
-  static void getExecutable(const uint8_t *Record,
-                            GOFF::ESDExecutable &Executable) {
-    uint8_t Value;
-    getBits(Record, 63, 5, 3, Value);
-    Executable = (GOFF::ESDExecutable)Value;
+  [[nodiscard]] ESDExecutable getExecutable() const {
+    return static_cast<GOFF::ESDExecutable>(getBits(63, 5, 3));
   }
 
-  static void getDuplicateSeverity(const uint8_t *Record,
-                                   GOFF::ESDDuplicateSymbolSeverity &DSS) {
-    uint8_t Value;
-    getBits(Record, 64, 2, 2, Value);
-    DSS = (GOFF::ESDDuplicateSymbolSeverity)Value;
+  [[nodiscard]] ESDDuplicateSymbolSeverity getDuplicateSeverity() const {
+    return static_cast<GOFF::ESDDuplicateSymbolSeverity>(getBits(64, 2, 2));
   }
 
-  static void getBindingStrength(const uint8_t *Record,
-                                 GOFF::ESDBindingStrength &Strength) {
-    uint8_t Value;
-    getBits(Record, 64, 4, 4, Value);
-    Strength = (GOFF::ESDBindingStrength)Value;
+  [[nodiscard]] ESDBindingStrength getBindingStrength() const {
+    return static_cast<GOFF::ESDBindingStrength>(getBits(64, 4, 4));
   }
 
-  static void getLoadingBehavior(const uint8_t *Record,
-                                 GOFF::ESDLoadingBehavior &Behavior) {
-    uint8_t Value;
-    getBits(Record, 65, 0, 2, Value);
-    Behavior = (GOFF::ESDLoadingBehavior)Value;
+  [[nodiscard]] ESDLoadingBehavior getLoadingBehavior() const {
+    return static_cast<GOFF::ESDLoadingBehavior>(getBits(65, 0, 2));
   }
 
-  static void getIndirectReference(const uint8_t *Record, bool &Indirect) {
-    uint8_t Value;
-    getBits(Record, 65, 3, 1, Value);
-    Indirect = (bool)Value;
+  [[nodiscard]] bool getIndirectReference() const {
+    return static_cast<bool>(getBits(65, 3, 1));
   }
 
-  static void getBindingScope(const uint8_t *Record,
-                              GOFF::ESDBindingScope &Scope) {
-    uint8_t Value;
-    getBits(Record, 65, 4, 4, Value);
-    Scope = (GOFF::ESDBindingScope)Value;
+  [[nodiscard]] ESDBindingScope getBindingScope() const {
+    return static_cast<GOFF::ESDBindingScope>(getBits(65, 4, 4));
   }
 
-  static void getLinkageType(const uint8_t *Record,
-                             GOFF::ESDLinkageType &Type) {
-    uint8_t Value;
-    getBits(Record, 66, 2, 1, Value);
-    Type = (GOFF::ESDLinkageType)Value;
+  [[nodiscard]] ESDLinkageType getLinkageType() const {
+    return static_cast<GOFF::ESDLinkageType>(getBits(66, 2, 1));
   }
 
-  static void getAlignment(const uint8_t *Record,
-                           GOFF::ESDAlignment &Alignment) {
-    uint8_t Value;
-    getBits(Record, 66, 3, 5, Value);
-    Alignment = (GOFF::ESDAlignment)Value;
+  [[nodiscard]] ESDAlignment getAlignment() const {
+    return static_cast<GOFF::ESDAlignment>(getBits(66, 3, 5));
   }
 
-  static uint16_t getNameLength(const uint8_t *Record) {
-    uint16_t Length;
-    get<uint16_t>(Record, 70, Length);
-    return Length;
+  [[nodiscard]] uint16_t getNameLength() const {
+    return get<uint16_t>(70);
   }
 };
 
 class ENDRecord : public Record {
 public:
-  static Error getData(const uint8_t *Record, SmallString<256> &CompleteData);
+  ENDRecord() = default;
+  ENDRecord(Record R) : Record(R) {}
+  Error getData(SmallString<256> &CompleteData) const;
 
-  static uint16_t getNameLength(const uint8_t *Record) {
-    uint16_t Length;
-    get<uint16_t>(Record, 24, Length);
-    return Length;
+  [[nodiscard]] uint16_t getNameLength() const {
+    return get<uint16_t>(24);
   }
 };
 
-} // end namespace object
+} // end namespace GOFF
+
 } // end namespace llvm
 
 #endif

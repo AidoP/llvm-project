@@ -16,10 +16,9 @@
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/IndexedMap.h"
-#include "llvm/BinaryFormat/GOFF.h"
+#include "llvm/Object/GOFF.h"
 #include "llvm/Object/ObjectFile.h"
 #include "llvm/Support/ConvertEBCDIC.h"
-#include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/TargetParser/SubtargetFeature.h"
 #include "llvm/TargetParser/Triple.h"
@@ -31,8 +30,8 @@ namespace object {
 class GOFFObjectFile : public ObjectFile {
   friend class GOFFSymbolRef;
 
-  IndexedMap<const uint8_t *> EsdPtrs; // Indexed by EsdId.
-  SmallVector<const uint8_t *, 256> TextPtrs;
+  IndexedMap<GOFF::ESDRecord> EsdPtrs; // Indexed by EsdId.
+  SmallVector<GOFF::TXTRecord, 256> TextPtrs;
 
   mutable DenseMap<uint32_t, std::pair<size_t, std::unique_ptr<char[]>>>
       EsdNamesCache;
@@ -84,13 +83,14 @@ private:
   Expected<section_iterator> getSymbolSection(DataRefImpl Symb) const override;
   uint64_t getSymbolSize(DataRefImpl Symb) const;
 
-  const uint8_t *getSymbolEsdRecord(DataRefImpl Symb) const;
+  GOFF::ESDRecord getSymbolEsdRecord(DataRefImpl Symb) const;
   bool isSymbolUnresolved(DataRefImpl Symb) const;
   bool isSymbolIndirect(DataRefImpl Symb) const;
 
   // SectionRef.
   void moveSectionNext(DataRefImpl &Sec) const override;
   virtual Expected<StringRef> getSectionName(DataRefImpl Sec) const override;
+  virtual Expected<StringRef> getSectionClass(DataRefImpl Sec) const override;
   uint64_t getSectionAddress(DataRefImpl Sec) const override;
   uint64_t getSectionSize(DataRefImpl Sec) const override;
   virtual Expected<ArrayRef<uint8_t>>
@@ -109,10 +109,10 @@ private:
     return relocation_iterator(RelocationRef(Sec, this));
   }
 
-  const uint8_t *getSectionEdEsdRecord(DataRefImpl &Sec) const;
-  const uint8_t *getSectionPrEsdRecord(DataRefImpl &Sec) const;
-  const uint8_t *getSectionEdEsdRecord(uint32_t SectionIndex) const;
-  const uint8_t *getSectionPrEsdRecord(uint32_t SectionIndex) const;
+  GOFF::ESDRecord getSectionEdEsdRecord(DataRefImpl &Sec) const;
+  GOFF::ESDRecord getSectionEdEsdRecord(uint32_t SectionIndex) const;
+  GOFF::ESDRecord getSectionPrEsdRecord(DataRefImpl &Sec) const;
+  GOFF::ESDRecord getSectionPrEsdRecord(uint32_t SectionIndex) const;
   uint32_t getSectionDefEsdId(DataRefImpl &Sec) const;
 
   // RelocationRef.
@@ -125,6 +125,11 @@ private:
   uint64_t getRelocationType(DataRefImpl Rel) const override { return 0; }
   void getRelocationTypeName(DataRefImpl Rel,
                              SmallVectorImpl<char> &Result) const override {}
+
+private:
+  Expected<StringRef> getEsdName(uint32_t EsdId) const;
+  GOFF::ESDRecord getEsdRecord(uint32_t EsdId) const;
+  Error addEsdRecord(GOFF::ESDRecord);
 };
 
 class GOFFSymbolRef : public SymbolRef {

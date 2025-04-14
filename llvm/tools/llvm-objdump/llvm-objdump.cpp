@@ -18,6 +18,7 @@
 #include "llvm-objdump.h"
 #include "COFFDump.h"
 #include "ELFDump.h"
+#include "GOFFDump.h"
 #include "MachODump.h"
 #include "ObjdumpOptID.h"
 #include "OffloadDump.h"
@@ -53,6 +54,7 @@
 #include "llvm/Object/ELFObjectFile.h"
 #include "llvm/Object/ELFTypes.h"
 #include "llvm/Object/FaultMapParser.h"
+#include "llvm/Object/GOFFObjectFile.h"
 #include "llvm/Object/MachO.h"
 #include "llvm/Object/MachOUniversal.h"
 #include "llvm/Object/OffloadBinary.h"
@@ -381,6 +383,8 @@ static Expected<std::unique_ptr<Dumper>> createDumper(const ObjectFile &Obj) {
     return createCOFFDumper(*O);
   if (const auto *O = dyn_cast<ELFObjectFileBase>(&Obj))
     return createELFDumper(*O);
+  if (const auto *O = dyn_cast<GOFFObjectFile>(&Obj))
+    return createGOFFDumper(*O);
   if (const auto *O = dyn_cast<MachOObjectFile>(&Obj))
     return createMachODumper(*O);
   if (const auto *O = dyn_cast<WasmObjectFile>(&Obj))
@@ -2770,11 +2774,25 @@ static size_t getMaxSectionNameWidth(const ObjectFile &Obj) {
   return MaxWidth;
 }
 
+static size_t getMaxSectionClassWidth(const ObjectFile &Obj) {
+  if (!Obj.isGOFF()) {
+    return 0;
+  }
+  // Default column width for class names is 5 even if no names are that long.
+  size_t MaxWidth = 5;
+  for (const SectionRef &Section : ToolSectionFilter(Obj)) {
+    StringRef Class = unwrapOrError(Section.getClass(), Obj.getFileName());
+    MaxWidth = std::max(MaxWidth, Class.size());
+  }
+  return MaxWidth;
+}
+
 void objdump::printSectionHeaders(ObjectFile &Obj) {
   if (Obj.isELF() && Obj.sections().empty())
     createFakeELFSections(Obj);
 
   size_t NameWidth = getMaxSectionNameWidth(Obj);
+  size_t ClassWidth = getMaxSectionClassWidth(Obj);
   size_t AddressWidth = 2 * Obj.getBytesInAddress();
   bool HasLMAColumn = shouldDisplayLMA(Obj);
   outs() << "\nSections:\n";
@@ -2782,13 +2800,19 @@ void objdump::printSectionHeaders(ObjectFile &Obj) {
     outs() << "Idx " << left_justify("Name", NameWidth) << " Size     "
            << left_justify("VMA", AddressWidth) << " "
            << left_justify("LMA", AddressWidth) << " Type\n";
-  else
-    outs() << "Idx " << left_justify("Name", NameWidth) << " Size     "
+  else {
+    outs() << "Idx " << left_justify("Name", NameWidth);
+    if (ClassWidth) {
+        outs() << " " << left_justify("Class", ClassWidth);
+    }
+    outs() << " Size     "
            << left_justify("VMA", AddressWidth) << " Type\n";
+  }
 
   uint64_t Idx;
   for (const SectionRef &Section : ToolSectionFilter(Obj, &Idx)) {
     StringRef Name = unwrapOrError(Section.getName(), Obj.getFileName());
+    StringRef Class = unwrapOrError(Section.getClass(), Obj.getFileName());
     uint64_t VMA = Section.getAddress();
     if (shouldAdjustVA(Section))
       VMA += AdjustVMA;
@@ -2809,6 +2833,11 @@ void objdump::printSectionHeaders(ObjectFile &Obj) {
              << format_hex_no_prefix(VMA, AddressWidth) << " "
              << format_hex_no_prefix(getELFSectionLMA(Section), AddressWidth)
              << " " << Type << "\n";
+    else if (ClassWidth != 0)
+      outs() << format("%3" PRIu64 " %-*s %-*s %08" PRIx64 " ", Idx, NameWidth,
+                       Name.str().c_str(), ClassWidth, Class.str().c_str(),
+                       Size)
+             << format_hex_no_prefix(VMA, AddressWidth) << " " << Type << "\n";
     else
       outs() << format("%3" PRIu64 " %-*s %08" PRIx64 " ", Idx, NameWidth,
                        Name.str().c_str(), Size)
