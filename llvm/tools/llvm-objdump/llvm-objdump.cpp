@@ -53,6 +53,7 @@
 #include "llvm/Object/ELFObjectFile.h"
 #include "llvm/Object/ELFTypes.h"
 #include "llvm/Object/FaultMapParser.h"
+#include "llvm/Object/GOFFObjectFile.h"
 #include "llvm/Object/MachO.h"
 #include "llvm/Object/MachOUniversal.h"
 #include "llvm/Object/OffloadBinary.h"
@@ -380,6 +381,8 @@ static Expected<std::unique_ptr<Dumper>> createDumper(const ObjectFile &Obj) {
     return createCOFFDumper(*O);
   if (const auto *O = dyn_cast<ELFObjectFileBase>(&Obj))
     return createELFDumper(*O);
+  if (const auto *O = dyn_cast<GOFFObjectFile>(&Obj))
+    return createGOFFDumper(*O);
   if (const auto *O = dyn_cast<MachOObjectFile>(&Obj))
     return createMachODumper(*O);
   if (const auto *O = dyn_cast<WasmObjectFile>(&Obj))
@@ -2731,35 +2734,52 @@ static bool shouldDisplayLMA(const ObjectFile &Obj) {
   return ShowLMA;
 }
 
-static size_t getMaxSectionNameWidth(const ObjectFile &Obj) {
-  // Default column width for names is 13 even if no names are that long.
-  size_t MaxWidth = 13;
+namespace {
+struct HeaderWidth {
+    size_t NameMax = 13;
+    size_t SegmentNameMax = 0;
+};
+} // namespace
+
+static void getMaxHeaderWidth(const ObjectFile &Obj, HeaderWidth &Width) {
   for (const SectionRef &Section : ToolSectionFilter(Obj)) {
     StringRef Name = unwrapOrError(Section.getName(), Obj.getFileName());
-    MaxWidth = std::max(MaxWidth, Name.size());
+    Width.NameMax = std::max(Width.NameMax, Name.size());
+    StringRef SegmentName = unwrapOrError(Section.getSegmentName(), Obj.getFileName());
+    Width.SegmentNameMax = std::max(Width.SegmentNameMax, SegmentName.size());
+    if (Width.SegmentNameMax != 0)
+      Width.SegmentNameMax = std::max(Width.SegmentNameMax, size_t(8));
   }
-  return MaxWidth;
+}
+
+static StringRef getSectionSegmentNameHeader(const ObjectFile &Obj) {
+  if (Obj.isGOFF())
+    return "Class";
+  return "";
 }
 
 void objdump::printSectionHeaders(ObjectFile &Obj) {
   if (Obj.isELF() && Obj.sections().empty())
     createFakeELFSections(Obj);
 
-  size_t NameWidth = getMaxSectionNameWidth(Obj);
+  HeaderWidth Width;
+  getMaxHeaderWidth(Obj, Width);
+  StringRef SegmentName = getSectionSegmentNameHeader(Obj);
+  bool HasSegment = Width.SegmentNameMax != 0;
   size_t AddressWidth = 2 * Obj.getBytesInAddress();
   bool HasLMAColumn = shouldDisplayLMA(Obj);
-  outs() << "\nSections:\n";
+  outs() << "\nSections:\nIdx " << left_justify("Name", Width.NameMax);
+  if (HasSegment)
+    outs() << " " << left_justify(SegmentName, Width.SegmentNameMax);
+  outs() << " Size     " << left_justify("VMA", AddressWidth) << " ";
   if (HasLMAColumn)
-    outs() << "Idx " << left_justify("Name", NameWidth) << " Size     "
-           << left_justify("VMA", AddressWidth) << " "
-           << left_justify("LMA", AddressWidth) << " Type\n";
-  else
-    outs() << "Idx " << left_justify("Name", NameWidth) << " Size     "
-           << left_justify("VMA", AddressWidth) << " Type\n";
+    outs() << left_justify("LMA", AddressWidth);
+  outs() << " Type\n";
 
   uint64_t Idx;
   for (const SectionRef &Section : ToolSectionFilter(Obj, &Idx)) {
     StringRef Name = unwrapOrError(Section.getName(), Obj.getFileName());
+    StringRef SegmentName = unwrapOrError(Section.getSegmentName(), Obj.getFileName());
     uint64_t VMA = Section.getAddress();
     if (shouldAdjustVA(Section))
       VMA += AdjustVMA;
@@ -2774,16 +2794,15 @@ void objdump::printSectionHeaders(ObjectFile &Obj) {
     if (Section.isDebugSection())
       Type += Type.empty() ? "DEBUG" : ", DEBUG";
 
+    outs() << format("%3" PRIu64 " %-*s", Idx, Width.NameMax,
+                     Name.str().c_str(), Size);
+    if (HasSegment)
+      outs() << " " << left_justify(SegmentName, Width.SegmentNameMax);
+    outs() << format(" %08" PRIx64 " ", Size)
+           << format_hex_no_prefix(VMA, AddressWidth);
     if (HasLMAColumn)
-      outs() << format("%3" PRIu64 " %-*s %08" PRIx64 " ", Idx, NameWidth,
-                       Name.str().c_str(), Size)
-             << format_hex_no_prefix(VMA, AddressWidth) << " "
-             << format_hex_no_prefix(getELFSectionLMA(Section), AddressWidth)
-             << " " << Type << "\n";
-    else
-      outs() << format("%3" PRIu64 " %-*s %08" PRIx64 " ", Idx, NameWidth,
-                       Name.str().c_str(), Size)
-             << format_hex_no_prefix(VMA, AddressWidth) << " " << Type << "\n";
+      outs() << format_hex_no_prefix(getELFSectionLMA(Section), AddressWidth);
+    outs() << " " << Type << "\n";
   }
 }
 

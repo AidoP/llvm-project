@@ -439,6 +439,10 @@ Expected<StringRef> GOFFObjectFile::getSectionName(DataRefImpl Sec) const {
   return Name;
 }
 
+Expected<StringRef> GOFFObjectFile::getSectionSegmentName(DataRefImpl Sec) const {
+  return getEsdName(getSectionEdEsdRecord(Sec).getEsdId());
+}
+
 uint64_t GOFFObjectFile::getSectionAddress(DataRefImpl Sec) const {
   uint32_t Offset;
   const uint8_t *EsdRecord = getSectionEdEsdRecord(Sec);

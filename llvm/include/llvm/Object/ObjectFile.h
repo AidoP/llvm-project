@@ -95,6 +95,7 @@ public:
   void moveNext();
 
   Expected<StringRef> getName() const;
+  Expected<StringRef> getSegmentName() const;
   uint64_t getAddress() const;
   uint64_t getIndex() const;
   uint64_t getSize() const;
@@ -262,6 +263,9 @@ protected:
 
   virtual void moveSectionNext(DataRefImpl &Sec) const = 0;
   virtual Expected<StringRef> getSectionName(DataRefImpl Sec) const = 0;
+  virtual Expected<StringRef> getSectionSegmentName(DataRefImpl Sec) const {
+    return StringRef();
+  }
   virtual uint64_t getSectionAddress(DataRefImpl Sec) const = 0;
   virtual uint64_t getSectionIndex(DataRefImpl Sec) const = 0;
   virtual uint64_t getSectionSize(DataRefImpl Sec) const = 0;
@@ -516,6 +520,10 @@ inline void SectionRef::moveNext() {
 
 inline Expected<StringRef> SectionRef::getName() const {
   return OwningObject->getSectionName(SectionPimpl);
+}
+
+inline Expected<StringRef> SectionRef::getSegmentName() const {
+  return OwningObject->getSectionSegmentName(SectionPimpl);
 }
 
 inline uint64_t SectionRef::getAddress() const {

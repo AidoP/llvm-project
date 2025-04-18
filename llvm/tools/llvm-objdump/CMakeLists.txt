@@ -28,6 +28,7 @@ add_llvm_tool(llvm-objdump
   SourcePrinter.cpp
   COFFDump.cpp
   ELFDump.cpp
+  GOFFDump.cpp
   MachODump.cpp
   OffloadDump.cpp
   WasmDump.cpp

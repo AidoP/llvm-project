@@ -91,6 +91,7 @@ private:
   // SectionRef.
   void moveSectionNext(DataRefImpl &Sec) const override;
   virtual Expected<StringRef> getSectionName(DataRefImpl Sec) const override;
+  virtual Expected<StringRef> getSectionSegmentName(DataRefImpl Sec) const override;
   uint64_t getSectionAddress(DataRefImpl Sec) const override;
   uint64_t getSectionSize(DataRefImpl Sec) const override;
   virtual Expected<ArrayRef<uint8_t>>
