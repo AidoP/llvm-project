@@ -132,7 +132,7 @@ TEST(GOFFObjectFileTest, GetSymbolName) {
   GOFFObjectFile *GOFFObj = dyn_cast<GOFFObjectFile>((*GOFFObjOrErr).get());
 
   for (SymbolRef Symbol : GOFFObj->symbols()) {
-    Expected<StringRef> SymbolNameOrErr = GOFFObj->getSymbolName(Symbol);
+    Expected<StringRef> SymbolNameOrErr = Symbol.getName();
     ASSERT_THAT_EXPECTED(SymbolNameOrErr, Succeeded());
     StringRef SymbolName = SymbolNameOrErr.get();
 
@@ -213,7 +213,7 @@ TEST(GOFFObjectFileTest, ContinuationGetSymbolName) {
   GOFFObjectFile *GOFFObj = dyn_cast<GOFFObjectFile>((*GOFFObjOrErr).get());
 
   for (SymbolRef Symbol : GOFFObj->symbols()) {
-    Expected<StringRef> SymbolNameOrErr = GOFFObj->getSymbolName(Symbol);
+    Expected<StringRef> SymbolNameOrErr = Symbol.getName();
     ASSERT_THAT_EXPECTED(SymbolNameOrErr, Succeeded());
     StringRef SymbolName = SymbolNameOrErr.get();
     EXPECT_EQ(SymbolName, "Helloworld");
@@ -307,7 +307,7 @@ TEST(GOFFObjectFileTest, ContinuationRecordNotTerminated) {
   GOFFObjectFile *GOFFObj = dyn_cast<GOFFObjectFile>((*GOFFObjOrErr).get());
 
   for (SymbolRef Symbol : GOFFObj->symbols()) {
-    Expected<StringRef> SymbolNameOrErr = GOFFObj->getSymbolName(Symbol);
+    Expected<StringRef> SymbolNameOrErr = Symbol.getName();
     EXPECT_THAT_EXPECTED(SymbolNameOrErr,
                          FailedWithMessage("continued bit should not be set"));
   }
@@ -415,7 +415,7 @@ TEST(GOFFObjectFileTest, TwoSymbols) {
   GOFFObjectFile *GOFFObj = dyn_cast<GOFFObjectFile>((*GOFFObjOrErr).get());
 
   for (SymbolRef Symbol : GOFFObj->symbols()) {
-    Expected<StringRef> SymbolNameOrErr = GOFFObj->getSymbolName(Symbol);
+    Expected<StringRef> SymbolNameOrErr = Symbol.getName();
     ASSERT_THAT_EXPECTED(SymbolNameOrErr, Succeeded());
     StringRef SymbolName = SymbolNameOrErr.get();
     EXPECT_EQ(SymbolName, "Hello");
@@ -586,10 +586,13 @@ TEST(GOFFObjectFileTest, TXTConstruct) {
   auto Symbols = GOFFObj->symbols();
   ASSERT_EQ(std::distance(Symbols.begin(), Symbols.end()), 1);
   SymbolRef Symbol = *Symbols.begin();
-  Expected<StringRef> SymbolNameOrErr = GOFFObj->getSymbolName(Symbol);
+  Expected<StringRef> SymbolNameOrErr = Symbol.getName();
   ASSERT_THAT_EXPECTED(SymbolNameOrErr, Succeeded());
   StringRef SymbolName = SymbolNameOrErr.get();
   EXPECT_EQ(SymbolName, "var#c");
+  Expected<section_iterator> SectionOrErr = Symbol.getSection();
+  ASSERT_THAT_EXPECTED(SectionOrErr, Succeeded());
+  EXPECT_EQ(SectionOrErr.get(), GOFFObj->section_begin());
 
   auto Sections = GOFFObj->sections();
   ASSERT_EQ(std::distance(Sections.begin(), Sections.end()), 1);

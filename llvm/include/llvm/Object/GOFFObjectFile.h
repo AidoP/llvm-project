@@ -16,10 +16,9 @@
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/IndexedMap.h"
-#include "llvm/BinaryFormat/GOFF.h"
+#include "llvm/Object/GOFF.h"
 #include "llvm/Object/ObjectFile.h"
 #include "llvm/Support/ConvertEBCDIC.h"
-#include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/TargetParser/SubtargetFeature.h"
 #include "llvm/TargetParser/Triple.h"
@@ -31,8 +30,8 @@ namespace object {
 class GOFFObjectFile : public ObjectFile {
   friend class GOFFSymbolRef;
 
-  IndexedMap<const uint8_t *> EsdPtrs; // Indexed by EsdId.
-  SmallVector<const uint8_t *, 256> TextPtrs;
+  IndexedMap<ESDRecord> EsdPtrs; // Indexed by EsdId.
+  SmallVector<TXTRecord, 256> TextPtrs;
 
   mutable DenseMap<uint32_t, std::pair<size_t, std::unique_ptr<char[]>>>
       EsdNamesCache;
@@ -44,8 +43,6 @@ class GOFFObjectFile : public ObjectFile {
   mutable DenseMap<uint32_t, SmallVector<uint8_t>> SectionDataCache;
 
 public:
-  Expected<StringRef> getSymbolName(SymbolRef Symbol) const;
-
   GOFFObjectFile(MemoryBufferRef Object, Error &Err);
   static inline bool classof(const Binary *V) { return V->isGOFF(); }
   section_iterator section_begin() const override;
@@ -57,7 +54,9 @@ public:
 
   Triple::ArchType getArch() const override { return Triple::systemz; }
 
-  Expected<SubtargetFeatures> getFeatures() const override { return SubtargetFeatures(); }
+  Expected<SubtargetFeatures> getFeatures() const override {
+    return SubtargetFeatures();
+  }
 
   bool isRelocatableObject() const override { return true; }
 
@@ -65,9 +64,7 @@ public:
   basic_symbol_iterator symbol_begin() const override;
   basic_symbol_iterator symbol_end() const override;
 
-  bool is64Bit() const override {
-    return true;
-  }
+  bool is64Bit() const override { return true; }
 
   bool isSectionNoLoad(DataRefImpl Sec) const;
   bool isSectionReadOnlyData(DataRefImpl Sec) const;
@@ -84,7 +81,7 @@ private:
   Expected<section_iterator> getSymbolSection(DataRefImpl Symb) const override;
   uint64_t getSymbolSize(DataRefImpl Symb) const;
 
-  const uint8_t *getSymbolEsdRecord(DataRefImpl Symb) const;
+  ESDRecord getSymbolEsdRecord(DataRefImpl Symb) const;
   bool isSymbolUnresolved(DataRefImpl Symb) const;
   bool isSymbolIndirect(DataRefImpl Symb) const;
 
@@ -109,11 +106,19 @@ private:
     return relocation_iterator(RelocationRef(Sec, this));
   }
 
-  const uint8_t *getSectionEdEsdRecord(DataRefImpl &Sec) const;
-  const uint8_t *getSectionPrEsdRecord(DataRefImpl &Sec) const;
-  const uint8_t *getSectionEdEsdRecord(uint32_t SectionIndex) const;
-  const uint8_t *getSectionPrEsdRecord(uint32_t SectionIndex) const;
-  uint32_t getSectionDefEsdId(DataRefImpl &Sec) const;
+  Error addEsdRecord(ESDRecord);
+  ESDRecord getEsdRecord(uint32_t EsdId) const;
+  Expected<StringRef> getEsdName(uint32_t EsdId) const;
+
+  uint32_t getSectionEsdId(uint32_t SectionIndex) const;
+  uint32_t getSectionEdEsdId(uint32_t SectionIndex) const;
+  uint32_t getSectionPrEsdId(uint32_t SectionIndex) const;
+  uint32_t getSectionEsdId(DataRefImpl &Sec) const;
+  uint32_t getSectionEdEsdId(DataRefImpl &Sec) const;
+  uint32_t getSectionPrEsdId(DataRefImpl &Sec) const;
+  ESDRecord getSectionEsdRecord(DataRefImpl &Sec) const;
+  ESDRecord getSectionEdEsdRecord(DataRefImpl &Sec) const;
+  ESDRecord getSectionPrEsdRecord(DataRefImpl &Sec) const;
 
   // RelocationRef.
   void moveRelocationNext(DataRefImpl &Rel) const override {}
